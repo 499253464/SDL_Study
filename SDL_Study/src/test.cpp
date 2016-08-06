@@ -4,6 +4,7 @@ and may not be redistributed without written permission.*/
 //Using SDL, SDL_image, standard IO, math, and strings
 #include <SDL.h>
 #include <SDL_image.h>
+#include <SDL_mixer.h>
 //#include <SDL_ttf.h>
 #include <stdio.h>
 #include <string>
@@ -77,11 +78,17 @@ SDL_Window* gWindow = NULL;
 SDL_Renderer* gRenderer = NULL;
 
 //Scene texture
-LTexture gSplashTexture;
+LTexture gPromptTexture;
 
-//Game Controller 1 handler with force feedback
-SDL_Joystick* gGameController = NULL;
-SDL_Haptic* gControllerHaptic = NULL;
+//The music that will be played
+Mix_Music *gMusic = NULL;
+
+//The sound effects that will be used
+Mix_Chunk *gScratch = NULL;
+Mix_Chunk *gHigh = NULL;
+Mix_Chunk *gMedium = NULL;
+Mix_Chunk *gLow = NULL;
+
 
 LTexture::LTexture()
 {
@@ -167,7 +174,7 @@ bool LTexture::loadFromRenderedText(std::string textureText, SDL_Color textColor
     else
     {
         printf("Unable to render text surface! SDL_ttf Error: %s\n", TTF_GetError());
-    }
+}
 
 
     //Return success
@@ -237,7 +244,7 @@ bool init()
     bool success = true;
 
     //Initialize SDL
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_HAPTIC) < 0)
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0)
     {
         printf("SDL could not initialize! SDL Error: %s\n", SDL_GetError());
         success = false;
@@ -248,38 +255,6 @@ bool init()
         if (!SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1"))
         {
             printf("Warning: Linear texture filtering not enabled!");
-        }
-
-        //Check for joysticks
-        if (SDL_NumJoysticks() < 1)
-        {
-            printf("Warning: No joysticks connected!\n");
-        }
-        else
-        {
-            //Load joystick
-            gGameController = SDL_JoystickOpen(0);
-            if (gGameController == NULL)
-            {
-                printf("Warning: Unable to open game controller! SDL Error: %s\n", SDL_GetError());
-            }
-            else
-            {
-                //Get controller haptic device
-                gControllerHaptic = SDL_HapticOpenFromJoystick(gGameController);
-                if (gControllerHaptic == NULL)
-                {
-                    printf("Warning: Controller does not support haptics! SDL Error: %s\n", SDL_GetError());
-                }
-                else
-                {
-                    //Get initialize rumble
-                    if (SDL_HapticRumbleInit(gControllerHaptic) < 0)
-                    {
-                        printf("Warning: Unable to initialize rumble! SDL Error: %s\n", SDL_GetError());
-                    }
-                }
-            }
         }
 
         //Create window
@@ -310,6 +285,13 @@ bool init()
                     printf("SDL_image could not initialize! SDL_image Error: %s\n", IMG_GetError());
                     success = false;
                 }
+
+                //Initialize SDL_mixer
+                if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) < 0)
+                {
+                    printf("SDL_mixer could not initialize! SDL_mixer Error: %s\n", Mix_GetError());
+                    success = false;
+                }
             }
         }
     }
@@ -322,10 +304,47 @@ bool loadMedia()
     //Loading success flag
     bool success = true;
 
-    //Load press texture
-    if (!gSplashTexture.loadFromFile("pic/splash.png"))
+    //Load prompt texture
+    if (!gPromptTexture.loadFromFile("pic/prompt.png"))
     {
-        printf("Failed to load splash texture!\n");
+        printf("Failed to load prompt texture!\n");
+        success = false;
+    }
+
+    //Load music
+    gMusic = Mix_LoadMUS("voice/beat.wav");
+    if (gMusic == NULL)
+    {
+        printf("Failed to load beat music! SDL_mixer Error: %s\n", Mix_GetError());
+        success = false;
+    }
+
+    //Load sound effects
+    gScratch = Mix_LoadWAV("voice/scratch.wav");
+    if (gScratch == NULL)
+    {
+        printf("Failed to load scratch sound effect! SDL_mixer Error: %s\n", Mix_GetError());
+        success = false;
+    }
+
+    gHigh = Mix_LoadWAV("voice/high.wav");
+    if (gHigh == NULL)
+    {
+        printf("Failed to load high sound effect! SDL_mixer Error: %s\n", Mix_GetError());
+        success = false;
+    }
+
+    gMedium = Mix_LoadWAV("voice/medium.wav");
+    if (gMedium == NULL)
+    {
+        printf("Failed to load medium sound effect! SDL_mixer Error: %s\n", Mix_GetError());
+        success = false;
+    }
+
+    gLow = Mix_LoadWAV("voice/low.wav");
+    if (gLow == NULL)
+    {
+        printf("Failed to load low sound effect! SDL_mixer Error: %s\n", Mix_GetError());
         success = false;
     }
 
@@ -335,13 +354,21 @@ bool loadMedia()
 void close()
 {
     //Free loaded images
-    gSplashTexture.free();
+    gPromptTexture.free();
 
-    //Close game controller with haptics
-    SDL_HapticClose(gControllerHaptic);
-    SDL_JoystickClose(gGameController);
-    gGameController = NULL;
-    gControllerHaptic = NULL;
+    //Free the sound effects
+    Mix_FreeChunk(gScratch);
+    Mix_FreeChunk(gHigh);
+    Mix_FreeChunk(gMedium);
+    Mix_FreeChunk(gLow);
+    gScratch = NULL;
+    gHigh = NULL;
+    gMedium = NULL;
+    gLow = NULL;
+
+    //Free the music
+    Mix_FreeMusic(gMusic);
+    gMusic = NULL;
 
     //Destroy window	
     SDL_DestroyRenderer(gRenderer);
@@ -350,6 +377,7 @@ void close()
     gRenderer = NULL;
 
     //Quit SDL subsystems
+    Mix_Quit();
     IMG_Quit();
     SDL_Quit();
 }
@@ -387,59 +415,60 @@ int main(int argc, char* args[])
                     {
                         quit = true;
                     }
+                    //Handle key press
                     else if (e.type == SDL_KEYDOWN)
                     {
-                        //Select surfaces based on key press
                         switch (e.key.keysym.sym)
                         {
-                        case SDLK_UP:
-                            //Play rumble at 75% strenght for 100 milliseconds
-                            if (SDL_HapticRumblePlay(gControllerHaptic, 0.75, 100) != 0)
+                            //Play high sound effect
+                        case SDLK_1:
+                            Mix_PlayChannel(-1, gHigh, 0);
+                            break;
+
+                            //Play medium sound effect
+                        case SDLK_2:
+                            Mix_PlayChannel(-1, gMedium, 0);
+                            break;
+
+                            //Play low sound effect
+                        case SDLK_3:
+                            Mix_PlayChannel(-1, gLow, 0);
+                            break;
+
+                            //Play scratch sound effect
+                        case SDLK_4:
+                            Mix_PlayChannel(-1, gScratch, 0);
+                            break;
+
+                        case SDLK_9:
+                            //If there is no music playing
+                            if (Mix_PlayingMusic() == 0)
                             {
-                                printf("Warning: Unable to play rumble! %s\n", SDL_GetError());
+                                //Play the music
+                                Mix_PlayMusic(gMusic, -1);
+                            }
+                            //If music is being played
+                            else
+                            {
+                                //If the music is paused
+                                if (Mix_PausedMusic() == 1)
+                                {
+                                    //Resume the music
+                                    Mix_ResumeMusic();
+                                }
+                                //If the music is playing
+                                else
+                                {
+                                    //Pause the music
+                                    Mix_PauseMusic();
+                                }
                             }
                             break;
 
-                        case SDLK_DOWN:
-                            //Play rumble at 75% strenght for 200 milliseconds
-                            if (SDL_HapticRumblePlay(gControllerHaptic, 0.75, 200) != 0)
-                            {
-                                printf("Warning: Unable to play rumble! %s\n", SDL_GetError());
-                            }
+                        case SDLK_0:
+                            //Stop the music
+                            Mix_HaltMusic();
                             break;
-
-                        case SDLK_LEFT:
-                            //Play rumble at 75% strenght for 300 milliseconds
-                            if (SDL_HapticRumblePlay(gControllerHaptic, 0.75, 300) != 0)
-                            {
-                                printf("Warning: Unable to play rumble! %s\n", SDL_GetError());
-                            }
-                            break;
-
-                        case SDLK_RIGHT:
-                            //Play rumble at 75% strenght for 400 milliseconds
-                            if (SDL_HapticRumblePlay(gControllerHaptic, 0.75, 400) != 0)
-                            {
-                                printf("Warning: Unable to play rumble! %s\n", SDL_GetError());
-                            }
-                            break;
-
-                        default:
-                            //Play rumble at 75% strenght for 500 milliseconds
-                            if (SDL_HapticRumblePlay(gControllerHaptic, 0.75, 500) != 0)
-                            {
-                                printf("Warning: Unable to play rumble! %s\n", SDL_GetError());
-                            }
-                            break;
-                        }
-                    }
-                    //Joystick button press
-                    else if (e.type == SDL_JOYBUTTONDOWN)
-                    {
-                        //Play rumble at 75% strenght for 500 milliseconds
-                        if (SDL_HapticRumblePlay(gControllerHaptic, 0.75, 500) != 0)
-                        {
-                            printf("Warning: Unable to play rumble! %s\n", SDL_GetError());
                         }
                     }
                 }
@@ -448,8 +477,8 @@ int main(int argc, char* args[])
                 SDL_SetRenderDrawColor(gRenderer, 0xFF, 0xFF, 0xFF, 0xFF);
                 SDL_RenderClear(gRenderer);
 
-                //Render splash image
-                gSplashTexture.render(0, 0);
+                //Render prompt
+                gPromptTexture.render(0, 0);
 
                 //Update screen
                 SDL_RenderPresent(gRenderer);
